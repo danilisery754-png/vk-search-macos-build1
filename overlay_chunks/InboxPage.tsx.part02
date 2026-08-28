@@ -1,0 +1,80 @@
+  useAutoGrowTextarea(textareaRef, reply)
+
+  const accounts = useQuery({ queryKey: ['accounts'], queryFn: () => api<Account[]>('/accounts') })
+  const suffix = new URLSearchParams({
+    ...(accountId ? { account_id: String(accountId) } : {}),
+    ...(filter === 'unread' ? { unread: 'true' } : {}),
+    ...(filter !== 'archive' && folderId ? { folder_id: String(folderId) } : {}),
+    ...(search ? { search } : {}),
+  }).toString()
+  const archiveSuffix = new URLSearchParams({
+    ...(accountId ? { account_id: String(accountId) } : {}),
+    ...(search ? { search } : {}),
+  }).toString()
+  const dialogs = useQuery({
+    queryKey: ['dialogs', filter, accountId, folderId, search],
+    queryFn: () => api<Dialog[]>(filter === 'archive' ? `/inbox/archive?${archiveSuffix}` : `/inbox/dialogs?${suffix}`),
+    refetchInterval: 5000,
+  })
+  const folders = useQuery({ queryKey: ['dialog-folders', accountId], queryFn: () => api<DialogFolder[]>(`/inbox/folders${accountId ? `?account_id=${accountId}` : ''}`) })
+  const messages = useQuery({ queryKey: ['dialog', selected], queryFn: () => api<MessagePayload>(`/inbox/dialogs/${selected}?limit=50`), enabled: selected != null, refetchInterval: selected != null ? 4000 : false })
+  const quickReplies = useQuery({ queryKey: ['quick-replies'], queryFn: () => api<QuickReply[]>('/quick-replies'), enabled: activePopover === 'quick' })
+  useEffect(() => { setFolderId('') }, [accountId])
+  useEffect(() => { if (filter === 'archive') setFolderId('') }, [filter])
+
+  const syncAccounts = useMutation({ mutationFn: (id: number) => api(`/inbox/sync?account_id=${id}`, { method: 'POST' }), onSuccess: () => client.invalidateQueries({ queryKey: ['dialogs'] }), onError: (error: Error) => toast.error(error.message) })
+  const syncDialog = useMutation({
+    mutationFn: async ({ dialogId, offset, count }: SyncDialogRequest) => {
+      const result = await api<SyncDialogResult>(`/inbox/dialogs/${dialogId}/sync?offset=${offset}&count=${count}`, { method: 'POST' })
+      if (!result.ok) throw new Error(result.error || 'Не удалось синхронизировать диалог')
+      return result
+    },
+    onSuccess: (_result, variables) => { setSyncError(''); client.invalidateQueries({ queryKey: ['dialog', variables.dialogId] }); client.invalidateQueries({ queryKey: ['dialogs'] }) },
+    onError: (error: Error) => setSyncError(error.message),
+  })
+  const markRead = useMutation({ mutationFn: (id: number) => api(`/inbox/dialogs/${id}/read`, { method: 'POST' }), onSuccess: (_data, id) => { client.invalidateQueries({ queryKey: ['dialogs'] }); client.invalidateQueries({ queryKey: ['accounts'] }); client.invalidateQueries({ queryKey: ['dialog', id] }) }, onError: (error: Error) => toast.error(error.message) })
+  const pinDialog = useMutation({ mutationFn: ({ id, is_pinned }: { id: number; is_pinned: boolean }) => api(`/inbox/dialogs/${id}`, { method: 'PATCH', body: JSON.stringify({ is_pinned }) }), onSuccess: () => { setDialogMenu(null); client.invalidateQueries({ queryKey: ['dialogs'] }) }, onError: (error: Error) => toast.error(error.message) })
+  const archiveDialog = useMutation({
+    mutationFn: ({ id, restore }: { id: number; restore: boolean }) => api(`/inbox/dialogs/${id}/${restore ? 'restore' : 'archive'}`, { method: 'POST' }),
+    onSuccess: (_data, variables) => {
+      setDialogMenu(null)
+      if (!variables.restore && selected === variables.id) setSelected(null)
+      client.invalidateQueries({ queryKey: ['dialogs'] })
+      client.invalidateQueries({ queryKey: ['dashboard-shell'] })
+      client.invalidateQueries({ queryKey: ['accounts'] })
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+  const createQuick = useMutation({ mutationFn: (text: string) => api<QuickReply>('/quick-replies', { method: 'POST', body: JSON.stringify({ text }) }), onSuccess: () => { setQuickText(''); client.invalidateQueries({ queryKey: ['quick-replies'] }) }, onError: (error: Error) => toast.error(error.message) })
+  const createFolder = useMutation({ mutationFn: ({ account_id, name }: { account_id: number; name: string }) => api<DialogFolder>('/inbox/folders', { method: 'POST', body: JSON.stringify({ account_id, name }) }), onSuccess: () => client.invalidateQueries({ queryKey: ['dialog-folders'] }), onError: (error: Error) => toast.error(error.message) })
+  const renameFolder = useMutation({ mutationFn: ({ id, name }: { id: number; name: string }) => api(`/inbox/folders/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }), onSuccess: () => client.invalidateQueries({ queryKey: ['dialog-folders'] }), onError: (error: Error) => toast.error(error.message) })
+  const deleteFolder = useMutation({ mutationFn: (id: number) => api(`/inbox/folders/${id}`, { method: 'DELETE' }), onSuccess: (_data, id) => { if (folderId === id) setFolderId(''); client.invalidateQueries({ queryKey: ['dialog-folders'] }); client.invalidateQueries({ queryKey: ['dialogs'] }) }, onError: (error: Error) => toast.error(error.message) })
+  const setFolderMembership = useMutation({ mutationFn: ({ folder, dialog, enabled }: { folder: number; dialog: number; enabled: boolean }) => api(`/inbox/folders/${folder}/dialogs/${dialog}`, { method: enabled ? 'PUT' : 'DELETE' }), onSuccess: () => { setDialogMenu(null); client.invalidateQueries({ queryKey: ['dialogs'] }); client.invalidateQueries({ queryKey: ['dialog-folders'] }) }, onError: (error: Error) => toast.error(error.message) })
+  const deleteQuick = useMutation({ mutationFn: (id: string) => api(`/quick-replies/${id}`, { method: 'DELETE' }), onSuccess: () => client.invalidateQueries({ queryKey: ['quick-replies'] }), onError: (error: Error) => toast.error(error.message) })
+
+  const send = useMutation({
+    mutationFn: async ({ dialogId = selected, text = reply, replyTo = replyTarget?.vk_message_id, forward }: { dialogId?: number | null; text?: string; replyTo?: number; forward?: Record<string, unknown> } = {}) => {
+      if (dialogId == null) throw new Error('Диалог не выбран')
+      const result = await api<ReplyResult>(`/inbox/dialogs/${dialogId}/reply`, { method: 'POST', body: JSON.stringify({ body: text, reply_to: replyTo, forward }) })
+      if (!result.ok) throw new Error(result.error?.trim() || 'Не удалось отправить сообщение через VK')
+      return { ...result, dialogId }
+    },
+    onSuccess: result => { setReply(''); setReplyTarget(null); setForwardTarget(null); if (result.dialogId === selected && selected != null) syncDialog.mutate({ dialogId: selected, offset: 0, count: 50 }); client.invalidateQueries({ queryKey: ['dialogs'] }) },
+    onError: (error: Error) => toast.error(error.message),
+  })
+
+  const editMessage = useMutation({ mutationFn: ({ message, text }: { message: MessageItem; text: string }) => api(`/inbox/dialogs/${selected}/messages/${message.vk_message_id}`, { method: 'PATCH', body: JSON.stringify({ body: text }) }), onSuccess: () => { setMessageMenu(null); if (selected != null) syncDialog.mutate({ dialogId: selected, offset: 0, count: 50 }) }, onError: (error: Error) => toast.error(error.message) })
+  const deleteMessage = useMutation({ mutationFn: (message: MessageItem) => api(`/inbox/dialogs/${selected}/messages/${message.vk_message_id}?delete_for_all=true`, { method: 'DELETE' }), onSuccess: () => { setMessageMenu(null); client.invalidateQueries({ queryKey: ['dialog', selected] }); client.invalidateQueries({ queryKey: ['dialogs'] }) }, onError: (error: Error) => toast.error(error.message) })
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, Dialog[]>()
+    for (const dialog of dialogs.data || []) { const list = map.get(dialog.account_name) || []; list.push(dialog); map.set(dialog.account_name, list) }
+    for (const rows of map.values()) rows.sort((a, b) => Number(Boolean(b.is_pinned)) - Number(Boolean(a.is_pinned)) || String(b.pinned_at || b.last_message_at || '').localeCompare(String(a.pinned_at || a.last_message_at || '')))
+    return [...map.entries()]
+  }, [dialogs.data])
+  const selectedDialog = useMemo(() => (dialogs.data || []).find(dialog => dialog.id === selected) || null, [dialogs.data, selected])
+  const orderedFolders = useMemo(() => {
+    const rows = [...(Array.isArray(folders.data) ? folders.data : [])].filter(folder => folder.name.toLowerCase().includes(folderSearch.trim().toLowerCase()))
+    const rank = new Map(folderOrder.map((id, index) => [id, index]))
+    return rows.sort((a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9) || a.name.localeCompare(b.name, 'ru-RU'))
+  }, [folderOrder, folderSearch, folders.data])
