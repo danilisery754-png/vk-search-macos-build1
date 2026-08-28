@@ -155,6 +155,17 @@ def main() -> None:
     ):
         replace_all_version(source_root / relative)
 
+    # v0.4.7 product-contract coverage remains valuable, but its two release
+    # metadata assertions are intentionally version-specific. Migrate only those
+    # assertions so the old behavioral contract still runs against v0.4.10.
+    legacy_contract = source_root / "backend/tests/test_v047_product_contract.py"
+    replace_once(legacy_contract, 'assert \'version="0.4.9"\' in main', 'assert \'version="0.4.10"\' in main')
+    replace_once(
+        legacy_contract,
+        'assert "VK_Search_0.4.9_macOS_arm64.dmg" in build',
+        'assert "VK_Search_0.4.10_macOS_arm64.dmg" in build',
+    )
+
     mismatches: list[str] = []
     for relative, expected in EXPECTED_V0410_BLOBS.items():
         path = source_root / relative
