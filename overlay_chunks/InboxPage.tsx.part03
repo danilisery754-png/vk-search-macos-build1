@@ -1,0 +1,80 @@
+  const folderGroups = useMemo(() => (accounts.data || []).map(account => ({ account, folders: orderedFolders.filter(folder => folder.account_id === account.id) })).filter(group => group.folders.length), [accounts.data, orderedFolders])
+  const dropFolder = (target: number) => { if (draggingFolder == null || draggingFolder === target) return setDraggingFolder(null); const ids = orderedFolders.map(folder => folder.id); const from = ids.indexOf(draggingFolder); const to = ids.indexOf(target); if (from >= 0 && to >= 0) { ids.splice(from, 1); ids.splice(to, 0, draggingFolder); setFolderOrder(ids) } setDraggingFolder(null) }
+  const openFolder = (folder: DialogFolder) => { setFilter('all'); setAccountId(folder.account_id); setFolderId(folder.id) }
+  const beginCreateFolder = (owner?: number) => { setFolderCreateAccountId(owner || (accountId ? Number(accountId) : '')); setFolderCreateName(''); setFolderCreateOpen(true) }
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    const el = messagesRef.current; if (!el) return
+    if (typeof el.scrollTo === 'function') el.scrollTo({ top: el.scrollHeight, behavior }); else el.scrollTop = el.scrollHeight
+    isNearBottomRef.current = true; setShowNewMessages(false)
+  }, [])
+
+  useEffect(() => { renderedRef.current = renderedMessages }, [renderedMessages])
+  useEffect(() => {
+    if (selected == null) return
+    setRenderedMessages([]); renderedRef.current = []; setBeforeCursor(null); setHasOlderLocal(false); setRemoteOffset(0); setHasMoreRemote(true); setSyncError(''); setShowNewMessages(false); isNearBottomRef.current = true; initialSyncRef.current = null; initializedDialogRef.current = null; setReplyTarget(null); setMessageMenu(null); setForwardTarget(null)
+    syncDialog.mutate({ dialogId: selected, offset: 0, count: 50 }, { onSuccess: result => { initialSyncRef.current = result; setRemoteOffset(current => Math.max(current, result.next_offset)); setHasMoreRemote(result.has_more) } })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected])
+
+  useEffect(() => {
+    if (selected == null) return
+    const dialogId = selected; let cancelled = false
+    const refresh = async () => {
+      try {
+        const result = await api<SyncDialogResult>(`/inbox/dialogs/${dialogId}/sync?offset=0&count=50`, { method: 'POST' })
+        if (!result.ok) throw new Error(result.error?.trim() || 'Не удалось обновить открытый диалог')
+        if (cancelled) return; setSyncError(''); client.invalidateQueries({ queryKey: ['dialog', dialogId] }); client.invalidateQueries({ queryKey: ['dialogs'] })
+      } catch (error) { if (!cancelled) setSyncError(error instanceof Error ? error.message : 'Не удалось обновить открытый диалог') }
+    }
+    const timer = window.setInterval(() => { void refresh() }, 5000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [client, selected])
+
+  useEffect(() => {
+    const payload = messages.data; if (selected == null || !payload) return
+    const incoming = payload.messages || []; const isInitial = initializedDialogRef.current !== selected; const current = renderedRef.current
+    const currentLastId = current.length ? current[current.length - 1].vk_message_id : null; const incomingLastId = incoming.length ? incoming[incoming.length - 1].vk_message_id : null
+    const hasNewLastMessage = !isInitial && currentLastId != null && incomingLastId != null && incomingLastId > currentLastId
+    if (isInitial) {
+      initializedDialogRef.current = selected; renderedRef.current = incoming; setRenderedMessages(incoming); setBeforeCursor(payload.next_before_vk_message_id); setHasOlderLocal(payload.has_older_local)
+      const syncMeta = initialSyncRef.current; setRemoteOffset(Math.max(syncMeta?.next_offset || 0, payload.local_total || 0)); if (syncMeta) setHasMoreRemote(syncMeta.has_more); requestAnimationFrame(() => scrollToBottom()); return
+    }
+    if (incoming.length) { const merged = new Map<number, MessageItem>(); for (const item of current) merged.set(item.vk_message_id, item); for (const item of incoming) merged.set(item.vk_message_id, item); const next = [...merged.values()].sort((left, right) => left.vk_message_id - right.vk_message_id); renderedRef.current = next; setRenderedMessages(next) }
+    if (payload.next_before_vk_message_id != null && current.length === 0) { setBeforeCursor(payload.next_before_vk_message_id); setHasOlderLocal(payload.has_older_local) }
+    if (hasNewLastMessage) { if (isNearBottomRef.current) requestAnimationFrame(() => scrollToBottom()); else setShowNewMessages(true) }
+  }, [messages.data, scrollToBottom, selected])
+
+  const fetchLocalOlder = useCallback(async (dialogId: number, cursor: number) => api<MessagePayload>(`/inbox/dialogs/${dialogId}?limit=200&before_vk_message_id=${cursor}`), [])
+  const loadOlder = useCallback(async () => {
+    const dialogId = selected; const el = messagesRef.current; const cursor = beforeCursor
+    if (dialogId == null || !el || cursor == null || loadingOlderRef.current || (!hasOlderLocal && !hasMoreRemote)) return
+    loadingOlderRef.current = true; const beforeHeight = el.scrollHeight
+    try {
+      let page = await fetchLocalOlder(dialogId, cursor); let remoteStillHasMore = hasMoreRemote
+      if (!page.messages.length && !page.has_older_local && hasMoreRemote) { const synced = await syncDialog.mutateAsync({ dialogId, offset: remoteOffset, count: 200 }); setRemoteOffset(synced.next_offset); setHasMoreRemote(synced.has_more); remoteStillHasMore = synced.has_more; page = await fetchLocalOlder(dialogId, cursor) }
+      if (page.messages.length) { const current = renderedRef.current; const seen = new Set(current.map(item => item.vk_message_id)); const older = page.messages.filter(item => !seen.has(item.vk_message_id)); const next = [...older, ...current]; renderedRef.current = next; setRenderedMessages(next); setBeforeCursor(page.next_before_vk_message_id); setHasOlderLocal(page.has_older_local); requestAnimationFrame(() => { const delta = el.scrollHeight - beforeHeight; if (delta > 0) el.scrollTop += delta }) }
+      else if (!remoteStillHasMore) { setBeforeCursor(null); setHasOlderLocal(false) }
+    } catch (error) { setSyncError(error instanceof Error ? error.message : 'Не удалось загрузить старые сообщения') } finally { loadingOlderRef.current = false }
+  }, [beforeCursor, fetchLocalOlder, hasMoreRemote, hasOlderLocal, remoteOffset, selected, syncDialog])
+
+  function handleMessageScroll() { const el = messagesRef.current; if (!el) return; const distance = el.scrollHeight - el.scrollTop - el.clientHeight; isNearBottomRef.current = distance <= 80; if (isNearBottomRef.current) setShowNewMessages(false); if (el.scrollTop <= 80 && (hasOlderLocal || hasMoreRemote)) void loadOlder() }
+  function openDialog(dialog: Dialog) { setSelected(dialog.id); if (filter !== 'archive' && dialog.unread_count > 0) markRead.mutate(dialog.id) }
+  function refreshCurrentDialog() { if (selected != null) syncDialog.mutate({ dialogId: selected, offset: 0, count: 50 }) }
+
+  function insertAtCaret(text: string) {
+    const area = textareaRef.current; const start = area?.selectionStart ?? reply.length; const end = area?.selectionEnd ?? start
+    setReply(value => `${value.slice(0, start)}${text}${value.slice(end)}`)
+    requestAnimationFrame(() => { textareaRef.current?.focus(); const position = start + text.length; textareaRef.current?.setSelectionRange(position, position) })
+  }
+
+  function handleTyping(value: string) {
+    setReply(value)
+    const now = Date.now()
+    if (selected != null && now - lastTypingRef.current > 5000) { lastTypingRef.current = now; void api(`/inbox/dialogs/${selected}/activity`, { method: 'POST', body: JSON.stringify({ activity: 'typing' }) }).catch(() => undefined) }
+  }
+
+  useEffect(() => {
+    if (activePopover === 'closed') return
+    const pointer = (event: PointerEvent) => {
+      const target = event.target
