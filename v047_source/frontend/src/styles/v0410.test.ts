@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import css from './v0410.css?raw'
+
+const css = readFileSync(new URL('./v0410.css', import.meta.url), 'utf8')
 
 describe('v0.4.10 scaled layout CSS', () => {
   it('pins one full-app viewport and scale layer without scale-specific branches', () => {
