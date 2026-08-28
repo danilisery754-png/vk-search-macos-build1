@@ -1,0 +1,130 @@
+  width: min(420px, calc(var(--logical-viewport-width) - 24px));
+  max-width: calc(var(--logical-viewport-width) - 24px);
+  max-height: min(420px, calc(var(--logical-viewport-height) - 24px));
+  overflow: auto;
+}
+
+.app-overlay-root .composer-popover--emoji {
+  overflow: visible;
+}
+
+.app-overlay-root .composer-popover--emoji .emoji-picker {
+  position: static !important;
+  inset: auto !important;
+  width: min(420px, calc(var(--logical-viewport-width) - 24px));
+  max-width: calc(var(--logical-viewport-width) - 24px);
+  max-height: min(420px, calc(var(--logical-viewport-height) - 24px));
+}
+
+.app-overlay-root .quick-replies-popover.composer-popover {
+  width: min(420px, calc(var(--logical-viewport-width) - 24px));
+}
+
+.app-overlay-root .run-selector-panel {
+  position: static !important;
+  inset: auto !important;
+}
+
+/* Full-screen scaled surfaces use logical viewport bounds, not raw vw/vh. */
+.page--inbox .modal-backdrop,
+.page--results .drawer-backdrop {
+  width: var(--logical-viewport-width);
+  height: var(--logical-viewport-height);
+  max-width: var(--logical-viewport-width);
+  max-height: var(--logical-viewport-height);
+}
+
+.page--inbox .forward-picker {
+  width: min(440px, calc(var(--logical-viewport-width) - 24px));
+  max-width: calc(var(--logical-viewport-width) - 24px);
+  max-height: min(70%, calc(var(--logical-viewport-height) - 24px));
+}
+
+.page--results .history-drawer {
+  width: min(560px, calc(var(--logical-viewport-width) - 24px));
+  max-width: calc(var(--logical-viewport-width) - 24px);
+  height: 100%;
+  max-height: var(--logical-viewport-height);
+}
+
+/* Legacy viewport-unit panels must use the logical scaled viewport. */
+.run-selector-panel {
+  width: min(430px, calc(var(--logical-viewport-width) - 24px));
+  max-width: calc(var(--logical-viewport-width) - 24px);
+  max-height: min(480px, calc(var(--logical-viewport-height) - 24px));
+}
+
+/* Settings shrink in logical CSS pixels as the full shell zoom grows. */
+.page--settings {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  container-type: inline-size;
+  container-name: settings-page;
+}
+
+.settings-layout {
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
+}
+
+.settings-content,
+.settings-content--bounded {
+  min-width: 0;
+  min-height: 0;
+  container-type: inline-size;
+  container-name: settings-content;
+}
+
+.settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+}
+
+.settings-grid > *,
+.settings-content .field,
+.settings-content input,
+.settings-content select,
+.settings-content textarea,
+.message-variants,
+.message-variant-list--scroll,
+.backup-list,
+.backup-list > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.message-variant-list--scroll {
+  max-height: min(680px, calc(var(--logical-viewport-height) - 160px));
+}
+
+@container settings-page (max-width: 760px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .settings-nav {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+}
+
+@container settings-content (max-width: 620px) {
+  .settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Inbox retains usable logical dimensions and becomes internally scrollable at high zoom. */
+.page--inbox {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto !important;
+  scrollbar-gutter: stable;
+}
+
+.page--inbox .page-header {
+  min-width: min(720px, 100%);
