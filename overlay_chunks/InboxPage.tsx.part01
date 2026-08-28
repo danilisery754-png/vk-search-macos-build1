@@ -1,0 +1,80 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ChevronDown, Inbox, MessageCircle, Paperclip, Pin, Plus, RefreshCcw, Search, Send, Smile, UserRound, X, Zap } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
+import { api } from '../api/client'
+import EmojiPicker from '../components/EmojiPicker'
+import MessageBubble from '../components/MessageBubble'
+import ScaledOverlay from '../components/ScaledOverlay'
+import { Button, EmptyState, PageHeader } from '../components/ui'
+import { useAutoGrowTextarea } from '../hooks/useAutoGrowTextarea'
+import type { Account, Dialog, DialogFolder, MessageItem, MessagePayload } from '../types'
+import { formatLocalDate, formatLocalDateTime } from '../utils/time'
+
+interface SyncDialogResult { ok: boolean; messages: number; fetched: number; total: number; next_offset: number; has_more: boolean; error?: string; state?: string }
+interface SyncDialogRequest { dialogId: number; offset: number; count: number }
+interface ReplyResult { ok: boolean; state?: string; message_id?: number | null; error?: string; account_id?: number }
+interface QuickReply { id: string; text: string; created_at?: string; updated_at?: string }
+interface MenuPoint<T> { value: T; x: number; y: number }
+type InboxFilter = 'all' | 'unread' | 'archive'
+
+function initialFilter(): InboxFilter {
+  const value = new URLSearchParams(window.location.search).get('filter')
+  return value === 'unread' || value === 'archive' ? value : 'all'
+}
+
+function lastMessagePreview(dialog: Dialog): string {
+  const text = String(dialog.last_message_preview || '').trim()
+  if (dialog.last_message_deleted) {
+    if (dialog.last_message_outgoing) return 'Вы: Сообщение удалено'
+    return text ? `Сообщение удалено · ${text}` : 'Сообщение удалено'
+  }
+  if (!text) return dialog.last_message_at ? 'Сообщение' : 'Нет сообщений'
+  return dialog.last_message_outgoing ? `Вы: ${text}` : text
+}
+
+export default function InboxPage() {
+  const client = useQueryClient()
+  const [filter, setFilter] = useState<InboxFilter>(initialFilter)
+  const [folderId, setFolderId] = useState<number | ''>('')
+  const [accountId, setAccountId] = useState<number | ''>('')
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState<number | null>(null)
+  const [reply, setReply] = useState('')
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [renderedMessages, setRenderedMessages] = useState<MessageItem[]>([])
+  const [beforeCursor, setBeforeCursor] = useState<number | null>(null)
+  const [hasOlderLocal, setHasOlderLocal] = useState(false)
+  const [remoteOffset, setRemoteOffset] = useState(0)
+  const [hasMoreRemote, setHasMoreRemote] = useState(true)
+  const [syncError, setSyncError] = useState('')
+  const [showNewMessages, setShowNewMessages] = useState(false)
+  const [activePopover, setActivePopover] = useState<'closed' | 'emoji' | 'quick'>('closed')
+  const [quickText, setQuickText] = useState('')
+  const [foldersCollapsed, setFoldersCollapsed] = useState(false)
+  const [folderSearch, setFolderSearch] = useState('')
+  const [folderCreateOpen, setFolderCreateOpen] = useState(false)
+  const [folderCreateAccountId, setFolderCreateAccountId] = useState<number | ''>('')
+  const [folderCreateName, setFolderCreateName] = useState('')
+  const [draggingFolder, setDraggingFolder] = useState<number | null>(null)
+  const [folderOrder, setFolderOrder] = useState<number[]>([])
+  const [replyTarget, setReplyTarget] = useState<MessageItem | null>(null)
+  const [dialogMenu, setDialogMenu] = useState<MenuPoint<Dialog> | null>(null)
+  const [messageMenu, setMessageMenu] = useState<MenuPoint<MessageItem> | null>(null)
+  const [forwardTarget, setForwardTarget] = useState<MessageItem | null>(null)
+  const [messageSearchOpen, setMessageSearchOpen] = useState(false)
+  const [messageSearch, setMessageSearch] = useState('')
+  const [searchResults, setSearchResults] = useState<MessageItem[]>([])
+  const [mediaOpen, setMediaOpen] = useState(false)
+  const [mediaItems, setMediaItems] = useState<unknown[]>([])
+  const messagesRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const emojiButtonRef = useRef<HTMLButtonElement>(null)
+  const quickButtonRef = useRef<HTMLButtonElement>(null)
+  const loadingOlderRef = useRef(false)
+  const isNearBottomRef = useRef(true)
+  const renderedRef = useRef<MessageItem[]>([])
+  const initialSyncRef = useRef<SyncDialogResult | null>(null)
+  const initializedDialogRef = useRef<number | null>(null)
+  const lastTypingRef = useRef(0)
