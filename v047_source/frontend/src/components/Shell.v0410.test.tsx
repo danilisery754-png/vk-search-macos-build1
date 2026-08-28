@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import Shell from './Shell'
@@ -22,6 +22,7 @@ function renderShell(scale: number) {
 }
 
 afterEach(() => {
+  cleanup()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -30,7 +31,7 @@ describe('Shell v0.4.10 full application scale', () => {
   it.each(scaleMatrix)('puts sidebar, topbar, workspace and overlay under the same scale layer at %s', async scale => {
     renderShell(scale)
     const layer = await screen.findByTestId('app-scale-layer')
-    expect(layer.style.zoom).toBe(String(scale))
+    await waitFor(() => expect(layer.style.zoom).toBe(String(scale)))
     expect(parseFloat(layer.style.width)).toBeCloseTo(100 / scale, 2)
     expect(parseFloat(layer.style.height)).toBeCloseTo(100 / scale, 2)
     expect(layer.querySelector('.sidebar')).not.toBeNull()
@@ -42,6 +43,7 @@ describe('Shell v0.4.10 full application scale', () => {
   it('does not retain a work-area-only zoom wrapper', async () => {
     renderShell(2)
     const layer = await screen.findByTestId('app-scale-layer')
+    await waitFor(() => expect(layer.style.zoom).toBe('2'))
     const oldRoot = layer.querySelector<HTMLElement>('.work-scale-root')
     expect(oldRoot?.style.zoom || '').toBe('')
   })
