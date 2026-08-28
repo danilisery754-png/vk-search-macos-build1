@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import shutil
 import sys
@@ -47,16 +48,38 @@ def replace_all_version(path: Path) -> None:
     path.write_text(text.replace(BASE_VERSION, VERSION), encoding="utf-8")
 
 
-def concatenate(parts_dir: Path, pattern: str, target: Path) -> None:
+def concatenate_exact(parts_dir: Path, pattern: str, target: Path, expected_sha: str) -> None:
     parts = sorted(parts_dir.glob(pattern))
     if not parts:
         raise SystemExit(f"No chunks found: {pattern}")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("wb") as output:
-        for part in parts:
-            output.write(part.read_bytes())
-            if not part.read_bytes().endswith(b"\n") and part != parts[-1]:
-                output.write(b"\n")
+    payloads = [part.read_bytes() for part in parts]
+
+    # Connector-created chunk files preserve every byte inside each chunk, but a
+    # line-range transfer may or may not carry the newline at a chunk boundary.
+    # Try only that finite ambiguity and accept exclusively the exact source blob.
+    boundary_count = max(0, len(payloads) - 1)
+    for separators in itertools.product((b"", b"\n"), repeat=boundary_count):
+        body = payloads[0]
+        for separator, payload in zip(separators, payloads[1:]):
+            body += separator + payload
+        for suffix in (b"", b"\n"):
+            candidate = body + suffix
+            if git_blob_sha(candidate) == expected_sha:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(candidate)
+                print(f"assembled exact {target.name}: {expected_sha}")
+                return
+
+    variants = []
+    for separators in itertools.product((b"", b"\n"), repeat=boundary_count):
+        body = payloads[0]
+        for separator, payload in zip(separators, payloads[1:]):
+            body += separator + payload
+        variants.extend((git_blob_sha(body), git_blob_sha(body + b"\n")))
+    raise SystemExit(
+        f"Could not reconstruct exact {target.name}; expected {expected_sha}; "
+        f"candidate hashes: {', '.join(sorted(set(variants)))}"
+    )
 
 
 def main() -> None:
@@ -73,7 +96,6 @@ def main() -> None:
     if not provenance.is_file() or "45d96c6f2931bbeb346e82a1e136ea5c624002ff" not in provenance.read_text(encoding="utf-8"):
         raise SystemExit("Baseline provenance is not the frozen v0.4.9 candidate")
 
-    # Copy every direct overlay file into the frozen v0.4.9 tree.
     direct_root = overlay_root / "v047_source"
     if direct_root.is_dir():
         for src in direct_root.rglob("*"):
@@ -84,12 +106,20 @@ def main() -> None:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
 
-    # Reassemble large exact files from deterministic chunks.
     chunks = overlay_root / "overlay_chunks"
-    concatenate(chunks, "InboxPage.tsx.part*", source_root / "frontend/src/pages/InboxPage.tsx")
-    concatenate(chunks, "v0410.css.part*", source_root / "frontend/src/styles/v0410.css")
+    concatenate_exact(
+        chunks,
+        "InboxPage.tsx.part*",
+        source_root / "frontend/src/pages/InboxPage.tsx",
+        EXPECTED_V0410_BLOBS["frontend/src/pages/InboxPage.tsx"],
+    )
+    concatenate_exact(
+        chunks,
+        "v0410.css.part*",
+        source_root / "frontend/src/styles/v0410.css",
+        EXPECTED_V0410_BLOBS["frontend/src/styles/v0410.css"],
+    )
 
-    # Small source changes are deterministic transformations of the frozen v0.4.9 base.
     main_tsx = source_root / "frontend/src/main.tsx"
     main_text = main_tsx.read_text(encoding="utf-8")
     import_line = "import './styles/v0410.css'"
@@ -125,7 +155,6 @@ def main() -> None:
     ):
         replace_all_version(source_root / relative)
 
-    # Exact byte identity for the large/new production UI source copied from the candidate.
     mismatches: list[str] = []
     for relative, expected in EXPECTED_V0410_BLOBS.items():
         path = source_root / relative
@@ -135,7 +164,6 @@ def main() -> None:
     if mismatches:
         raise SystemExit("v0.4.10 overlay identity mismatch:\n" + "\n".join(mismatches))
 
-    # Critical metadata and wiring assertions before any dependency install/test/build.
     checks = {
         "frontend package": f'"version": "{VERSION}"' in package_path.read_text(encoding="utf-8"),
         "backend package": f'version = "{VERSION}"' in (source_root / "backend/pyproject.toml").read_text(encoding="utf-8"),
